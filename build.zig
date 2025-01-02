@@ -1,56 +1,53 @@
 const std = @import("std");
-const mach = @import("mach");
+const rlz = @import("raylib-zig");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
 pub fn build(b: *std.Build) !void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const mach_dep = b.dependency("mach", .{
-        .target = target,
-        .optimize = optimize,
-
-        // Since we're only using @import("mach").core, we can specify this to avoid
-        // pulling in unneccessary dependencies.
-        .core = true,
-    });
-    const app = try mach.CoreApp.init(b, mach_dep.builder, .{
-        .name = "myapp",
-        .src = "src/main.zig",
-        .target = target,
-        .optimize = optimize,
-        .deps = &[_]std.Build.Module.Import{},
-    });
-    if (b.args) |args| app.run.addArgs(args);
-
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&app.run.step);
-
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    const unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
+    const raylib_dep = b.dependency("raylib-zig", .{
         .target = target,
         .optimize = optimize,
     });
 
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const run_unit_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_unit_tests.step);
+    const raylib = raylib_dep.module("raylib");
+    const raylib_artifact = raylib_dep.artifact("raylib");
+
+    //web exports are completely separate
+    if (target.query.os_tag == .emscripten) {
+        const exe_lib = try rlz.emcc.compileForEmscripten(b, "Mythix", "src/main.zig", target, optimize);
+
+        exe_lib.linkLibrary(raylib_artifact);
+        exe_lib.root_module.addImport("raylib", raylib);
+
+        // Note that raylib itself is not actually added to the exe_lib output file, so it also needs to be linked with emscripten.
+        const link_step = try rlz.emcc.linkWithEmscripten(b, &[_]*std.Build.Step.Compile{ exe_lib, raylib_artifact });
+        //this lets your program access files like "resources/my-image.png":
+        link_step.addArg("--embed-file");
+        link_step.addArg("resources/");
+
+        // Use custom HTML template
+        link_step.addArg("--shell-file");
+        link_step.addArg("shell.html");
+
+        // Hook up build steps
+        b.getInstallStep().dependOn(&link_step.step);
+        const run_step = try rlz.emcc.emscriptenRunStep(b);
+        run_step.step.dependOn(&link_step.step);
+
+        const run_option = b.step("run", "Run Mythix");
+        run_option.dependOn(&run_step.step);
+        return;
+    }
+
+    const exe = b.addExecutable(.{ .name = "Mythix", .root_source_file = b.path("src/main.zig"), .optimize = optimize, .target = target });
+
+    exe.linkLibrary(raylib_artifact);
+    exe.root_module.addImport("raylib", raylib);
+
+    const run_cmd = b.addRunArtifact(exe);
+    const run_step = b.step("run", "Run Mythix");
+    run_step.dependOn(&run_cmd.step);
+
+    b.installArtifact(exe);
 }

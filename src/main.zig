@@ -1,91 +1,83 @@
-const std = @import("std");
-const core = @import("mach").core;
-const gpu = core.gpu;
+// raylib-zig (c) Nikolas Wipper 2023
 
-pub const App = @This();
+const rl = @import("raylib");
 
-title_timer: core.Timer,
-pipeline: *gpu.RenderPipeline,
+const GameScreen = enum { LOGO, TITLE, GAMEPLAY, ENDING };
 
-pub fn init(app: *App) !void {
-    try core.init(.{});
+pub fn main() anyerror!void {
+    // Initialization
+    //--------------------------------------------------------------------------------------
+    const screenWidth = 800;
+    const screenHeight = 450;
 
-    const shader_module = core.device.createShaderModuleWGSL("shader.wgsl", @embedFile("shader.wgsl"));
-    defer shader_module.release();
+    var currentScreen: GameScreen = GameScreen.LOGO;
 
-    // Fragment state
-    const blend = gpu.BlendState{};
-    const color_target = gpu.ColorTargetState{
-        .format = core.descriptor.format,
-        .blend = &blend,
-        .write_mask = gpu.ColorWriteMaskFlags.all,
-    };
-    const fragment = gpu.FragmentState.init(.{
-        .module = shader_module,
-        .entry_point = "frag_main",
-        .targets = &.{color_target},
-    });
-    const pipeline_descriptor = gpu.RenderPipeline.Descriptor{
-        .fragment = &fragment,
-        .vertex = gpu.VertexState{
-            .module = shader_module,
-            .entry_point = "vertex_main",
-        },
-    };
-    const pipeline = core.device.createRenderPipeline(&pipeline_descriptor);
+    var framesCounter: u32 = 0;
 
-    app.* = .{ .title_timer = try core.Timer.start(), .pipeline = pipeline };
-}
+    rl.initWindow(screenWidth, screenHeight, "raylib-zig [core] example - basic window");
+    defer rl.closeWindow(); // Close window and OpenGL context
 
-pub fn deinit(app: *App) void {
-    defer core.deinit();
-    app.pipeline.release();
-}
+    rl.setTargetFPS(60); // Set our game to run at 60 frames-per-second
+    //--------------------------------------------------------------------------------------
 
-pub fn update(app: *App) !bool {
-    var iter = core.pollEvents();
-    while (iter.next()) |event| {
-        switch (event) {
-            .close => return true,
-            else => {},
+    while (!rl.windowShouldClose()) { // Detect window close button or ESC key
+
+        switch (currentScreen) {
+            .LOGO => {
+                framesCounter += 1;
+
+                if (framesCounter > 120) {
+                    currentScreen = .TITLE;
+                }
+            },
+
+            .TITLE => {
+                if (rl.isKeyPressed(rl.KeyboardKey.enter) or rl.isGestureDetected(rl.Gesture.tap)) {
+                    currentScreen = .GAMEPLAY;
+                }
+            },
+
+            .GAMEPLAY => {
+                if (rl.isKeyPressed(rl.KeyboardKey.enter) or rl.isGestureDetected(rl.Gesture.tap)) {
+                    currentScreen = .ENDING;
+                }
+            },
+
+            .ENDING => {
+                if (rl.isKeyPressed(rl.KeyboardKey.enter) or rl.isGestureDetected(rl.Gesture.tap)) {
+                    currentScreen = .TITLE;
+                }
+            },
+        }
+
+        rl.beginDrawing();
+        defer rl.endDrawing();
+
+        rl.clearBackground(rl.Color.white);
+
+        switch (currentScreen) {
+            .LOGO => {
+                rl.drawText("LOGO SCREEN", 20, 20, 40, rl.Color.light_gray);
+                rl.drawText("WAIT for 2 seconds...", 290, 220, 40, rl.Color.light_gray);
+            },
+
+            .TITLE => {
+                rl.drawRectangle(0, 0, screenWidth, screenHeight, rl.Color.green);
+                rl.drawText("TITLE SCREEN", 20, 20, 40, rl.Color.dark_green);
+                rl.drawText("Press ENTER or TAP to jump to ending screen", 120, 220, 20, rl.Color.dark_green);
+            },
+
+            .GAMEPLAY => {
+                rl.drawRectangle(0, 0, screenWidth, screenHeight, rl.Color.purple);
+                rl.drawText("GAMEPLAY SCREEN", 20, 20, 40, rl.Color.maroon);
+                rl.drawText("Press ENTER or TAP to jump to ending screen", 130, 220, 20, rl.Color.maroon);
+            },
+
+            .ENDING => {
+                rl.drawRectangle(0, 0, screenWidth, screenHeight, rl.Color.blue);
+                rl.drawText("ENDING SCREEN", 20, 20, 40, rl.Color.dark_blue);
+                rl.drawText("Press ENTER or TAP to jump to ending screen", 120, 220, 20, rl.Color.dark_blue);
+            },
         }
     }
-
-    const queue = core.queue;
-    const back_buffer_view = core.swap_chain.getCurrentTextureView().?;
-    const color_attachment = gpu.RenderPassColorAttachment{
-        .view = back_buffer_view,
-        .clear_value = std.mem.zeroes(gpu.Color),
-        .load_op = .clear,
-        .store_op = .store,
-    };
-
-    const encoder = core.device.createCommandEncoder(null);
-    const render_pass_info = gpu.RenderPassDescriptor.init(.{
-        .color_attachments = &.{color_attachment},
-    });
-    const pass = encoder.beginRenderPass(&render_pass_info);
-    pass.setPipeline(app.pipeline);
-    pass.draw(3, 1, 0, 0);
-    pass.end();
-    pass.release();
-
-    var command = encoder.finish(null);
-    encoder.release();
-
-    queue.submit(&[_]*gpu.CommandBuffer{command});
-    command.release();
-    core.swap_chain.present();
-    back_buffer_view.release();
-
-    // update the window title every second
-    if (app.title_timer.read() >= 1.0) {
-        app.title_timer.reset();
-        try core.printTitle("Triangle [ {d}fps ] [ Input {d}hz ]", .{
-            core.frameRate(),
-            core.inputRate(),
-        });
-    }
-
-    return false;
 }
